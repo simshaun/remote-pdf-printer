@@ -1,4 +1,3 @@
-const asyncWrap = require('../asyncWrap');
 const uniqueFilename = require('unique-filename');
 const path = require('path');
 const fs = require('fs');
