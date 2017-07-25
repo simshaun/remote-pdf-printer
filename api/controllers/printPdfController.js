@@ -18,21 +18,35 @@ const options = {
 };
 
 async function load(html) {
+  console.log('Load(html) called');
+
   const tab = await CDP.New();
   const client = await CDP({ tab });
-  const { Page } = client;
+  const { Network, Page } = client;
+  await Promise.all([Network.enable(), Page.enable()]);
 
-  const url = /^(https?|file|data):/i.test(html) ? html : `data:text/html,${html}`;
+  return new Promise((resolve, reject) => {
+    let failed = false;
 
-  await Page.enable();
-  await Page.navigate({ url });
-  await Page.loadEventFired();
+    Network.loadingFailed(() => {
+      failed = true;
+      console.log('Load(html) Network.loadingFailed');
+      reject(new Error('Load(html) unable to load remote URL: ' + html));
+    });
 
-  return { client, tab };
+    const url = /^(https?|file|data):/i.test(html) ? html : `data:text/html,${html}`;
+    Page.navigate({ url });
+    Page.loadEventFired(() => {
+      if (!failed) {
+        console.log('Load(html) resolved');
+        resolve(client);
+      }
+    });
+  });
 }
 
 async function getPdf(html) {
-  const { client } = await load(html);
+  const client = await load(html);
   const { Page } = client;
 
   // https://chromedevtools.github.io/debugger-protocol-viewer/tot/Page/#method-printToPDF
@@ -42,25 +56,23 @@ async function getPdf(html) {
   return pdf;
 }
 
-exports.print_url = asyncWrap.wrap(async function (req, res) {
+exports.print_url = function (req, res) {
   console.log('Request for ' + req.query.url);
 
-  try {
-    const pdf = await getPdf(req.query.url);
+  getPdf(req.query.url).then(async (pdf) => {
     const randomPrefixedTmpfile = uniqueFilename(options.dir);
 
-    await fs.writeFileSync(randomPrefixedTmpfile, Buffer.from(pdf.data, 'base64'), (err) => {
-      if (err) {
-        throw err;
+    await fs.writeFileSync(randomPrefixedTmpfile, Buffer.from(pdf.data, 'base64'), (error) => {
+      if (error) {
+        throw error;
       }
       console.log('saved!');
     });
 
     console.log('wrote file ' + randomPrefixedTmpfile + ' successfully');
     res.json({ pdf: path.basename(randomPrefixedTmpfile) });
-
-  } catch (error) {
-    res.status(400).json({ error: 'Unable to generate/save PDF!', message: error });
-    console.log('Caught Error ' + error);
-  }
-});
+  }).catch((error) => {
+    res.status(400).json({ error: 'Unable to generate/save PDF!', message: error.message });
+    console.log('Caught ' + error);
+  });
+};
